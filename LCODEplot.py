@@ -7,6 +7,7 @@ mpl.rcParams['figure.figsize'] = (6.28, 4)
 mpl.rcParams['figure.dpi'] = 120
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import pandas as pd
 from pandas import DataFrame  as df
 import numpy as np
 from collections import namedtuple
@@ -17,7 +18,7 @@ import re
 #SGC is a default unit system
 e = 4.8032e-10
 c = 2.99792458e10
-m = 9.10938356e-28
+m_e = 9.10938356e-28
 m_MeV = 0.5109989461
 M = 1.672621898e-24
 M_MeV = 938.2720813
@@ -33,7 +34,23 @@ cmTomkm = 1e4
 cmTomm = 10
 cmTom = 1e-2
 
+# Distances
+nm, um, mm, cm, m = dist_units = np.array([1e-7, 1e-4, 1e-1, 1, 100]) / 0.02
 
+# Times
+fs, ps, ns, us, ms, s = time_units = np.array([1e-15, 1e-12, 1e-9, 1e-6, 1e-3, 1]) * c/0.02
+
+# Angles
+mrad, rad = 1e-3, 1
+
+# Densities
+cm3, m3 = np.array([1, 1e6]) / 7e14
+
+# # Distances
+# dist_units = np.array([1e-7, 1e-4, 1e-1, 1, 100])
+
+# # Times
+# time_units = np.array([1e-15, 1e-12, 1e-9, 1e-6, 1e-3, 1])
 
 # BEAM PROFILES
 def Uniform(start=0, length=1):
@@ -98,12 +115,14 @@ class LCODEplot():
         self.path = path
         try:    
             config = open(os.path.join(path, 'lcode.cfg'), 'r').read()
+            self.config = config
             self.r_size = find(config, 'window-width')
             self.xi_size = find(config, 'window-length')
             self.r_step = find(config, 'r-step')
             self.xi_step = find(config, 'xi-step')
             self.t_step = find(config, 'time-step')
             self.beam_partic_in_layer = find(config, 'beam-particles-in-layer')
+            
         except:
             print("""There is no lcode.cfg or some parameters in it. 
             To draw field maps define: r_size, xi_size, r_step, xi_step, t_step.
@@ -111,8 +130,12 @@ class LCODEplot():
         self.beam = None
         self.F = {}
         self._n0 = n
-        self.wp = sqrt(4*pi*n*e**2/m)
-        self.E0_MVm = m*c*self.wp/e*GsToMVm
+        self.wp = sqrt(4*pi*n*e**2/m_e)
+        self.E0_MVm = m_e*c*self.wp/e*GsToMVm
+#         global nm, um, mm, cm, m
+#         global fs, ps, ns, us, ms, s
+#         nm, um, mm, cm, m = dist_units / (c/self.wp)
+#         fs, ps, ns, us, ms, s = time_units * self.wp
     def set_parameter(self, par, val):
         config = ''
         with open(os.path.join(self.path, 'lcode.cfg'), 'r') as config_file:
@@ -121,8 +144,11 @@ class LCODEplot():
         mask = '{}={}' if part[0] == ' ' else '{} = {}'
         config = re.sub('\s' + par + '\s?=\s?[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?', part[0] + mask.format(par, val), config) 
         with open(os.path.join(self.path, 'lcode.cfg'), 'w') as config_file:
+            print('Changing %s to %f... ' % (par, val), end='') 
             config_file.write(config)
-        return config
+        print('done.')
+        self.config = config
+        return
     def get_parameter(self, par):
         config = ''
         with open(os.path.join(self.path, 'lcode.cfg'), 'r') as config_file:
@@ -134,17 +160,44 @@ class LCODEplot():
     @n.setter
     def n(self, n):
         self._n0=n
-        self.wp = sqrt(4*pi*n*e**2/m)
-        self.E0_MVm = m*c*self.wp/e*GsToMVm
+        self.wp = sqrt(4*pi*n*e**2/m_e)
+        self.E0_MVm = m_e*c*self.wp/e*GsToMVm
+#         global nm, um, mm, cm, m
+#         global fs, ps, ns, us, ms, s
+#         nm, um, mm, cm, m = dist_units / (c/self.wp)
+        fs, ps, ns, us, ms, s = time_units * self.wp
     def __read_beamfile__(self, name='beamfile.bin'):
         try:
             filename = os.path.join(self.path, name)
-            dt = np.dtype([('xi', float), ('r', float), ('pz', float), ('pr', float), ('M', float), ('m_q', float), ('q', float), ('N', float)])
+            dt = np.dtype([('xi', float), ('r', float), ('pz', float), ('pr', float), ('M', float), ('q_m', float), ('q', float), ('N', float)])
             arr = np.fromfile(filename, dt)
-            self.beam = df(arr, columns = ['xi', 'r', 'pz', 'pr', 'M', 'm_q', 'q', 'N'])
-            return False
+            beam = df(arr, columns = ['xi', 'r', 'pz', 'pr', 'M', 'q_m', 'q', 'N'])
+            return beam
         except IOError:
             print('There is no beamfile.bin')
+            return True
+    def add_beam(self, name='beamfile.bin', tofile=False):
+        try:
+            if self.beam == None:
+                self.beam = self.__read_beamfile__(name)
+            else:
+                self.beam = pd.concat([self.beam, self.__read_beamfile__(name)])
+            if tofile:
+                self.beam.values.tofile(os.path.join(self.path, tofile))
+            return False
+        except:
+            print('Failed to add the beam {}.'.format(os.path.join(self.path, name)))
+            return True
+    def merge_beams(self, name1, name2, tofile=False):
+        try:
+            beam1 = self.__read_beamfile__(name1)
+            beam2 = self.__read_beamfile__(name2)
+            beam = pd.concat([beam1, beam2])
+            if tofile:
+                beam.values.tofile(os.path.join(self.path, tofile))
+            return beam
+        except:
+            print('Failed to merge the beams {} and {}.'.format(os.path.join(self.path, name1), os.path.join(self.path, name2)))
             return True
     def __read_field__(self, field, time, compress):
         try:
@@ -154,14 +207,14 @@ class LCODEplot():
         except IOError:
             print('There is no file')
             return True   
-    def make_beam(self, xi_distr, r_distr, pz_distr, ang_distr, Ipeak_kA, m_q=1.0, partic_in_layer=200, saveto='./'):
-        """make_beam(xi_shape, r_shape, pz_shape, ang_shape, Ipeak_kA, N_partic=10000, m_q=1.0, partic_in_layer = 200, saveto='./')"""
-        if m_q == 1 and Ipeak_kA > 0:
+    
+    def make_beam(self, xi_distr, r_distr, pz_distr, ang_distr, Ipeak_kA, q_m=1.0, partic_in_layer=200, saveto='./', name='beamfile.bin'):
+        """make_beam(xi_shape, r_shape, pz_shape, ang_shape, Ipeak_kA, N_partic=10000, q_m=1.0, partic_in_layer = 200, saveto='./')"""
+        if q_m == 1 and Ipeak_kA > 0:
             print('Electrons must have negative current.')
             return
         if xi_distr.med > 0:
-            print('xi values must be negative.')
-            return
+            print('Beam center is in xi>0.')
         try:
             partic_in_layer=self.beam_partic_in_layer
         except:
@@ -174,7 +227,7 @@ class LCODEplot():
             r_size = 10
             print('Variable xi_step or r_size is not found. Default values: xi_step = %.3f, r_size = %3f' % (xi_step, r_size))            
         if saveto and 'beamfile.bin' in os.listdir(saveto):
-            print('Another beamfile.bin is found. You may delete it using the following command: "!rm %s".' % os.path.join(saveto, 'beamfile.bin'))
+            print('Another beamfile.bin is found. You may delete it using the following command: "!rm %s".' % os.path.join(saveto, name))
             return
         I0 = 17 # kA
         q = 2.*Ipeak_kA/I0/partic_in_layer
@@ -184,7 +237,7 @@ class LCODEplot():
         while True:
             xi = xi_distr(N)
             print('Trying', N, 'particles')
-            xi = xi[(-self.xi_size <= xi) & (xi <= 0)]
+            xi = xi[(-self.xi_size <= xi)]# & (xi <= 0)]
             if np.sum((xi_distr.med - xi_step/2 < xi) & (xi < xi_distr.med + xi_step/2)) < partic_in_layer:
                 print(N, 'is not enough:', np.sum((xi_distr.med - xi_step < xi) & (xi < xi_distr.med)))
                 N *= 10
@@ -198,32 +251,39 @@ class LCODEplot():
             pz = pz_distr(K)
             pr = gamma * ang_distr(K)
             M = gamma * ang_distr(K) * r
-            particles = np.array([xi, r, pz, pr, M, m_q * np.ones(K), q * np.ones(K), np.arange(K)])
+            particles = np.array([xi, r, pz, pr, M, q_m * np.ones(K), q * np.ones(K), np.arange(K)])
             beam = np.vstack([particles.T, stub_particle])
             break
-        beam = df(beam, columns=['xi', 'r', 'pz', 'pr', 'M', 'm_q', 'q', 'N'])
+        beam = df(beam, columns=['xi', 'r', 'pz', 'pr', 'M', 'q_m', 'q', 'N'])
+        head = beam[beam.eval('xi>0')]
+        beam = beam[beam.eval('xi<=0')]
         #beam.sort_values('xi', inplace=True, ascending=False)
         if saveto:
-            beam.values.tofile(os.path.join(saveto, 'beamfile.bin'))
-        return beam 
+            beam.values.tofile(os.path.join(saveto, name))
+            head.values.tofile(os.path.join(saveto, 'head-' + name))
+        return beam
     
 
-    def plot_beam(self, x='xi', y='pz' , cond=None, x_units='', y_units='', **kwargs):
-        columns = {'xi': 0, 'r': 0, 'pz': 1, 'pr': 1, 'pf': 1, 'M': 2, 'm_q': 2, 'q': 2, 'N': 2}
-        tolatex = {'xi': r'\xi', 'r': 'r', 'pz': 'p_z', 'pr': 'p_r', 'pf': r'p_\phi', 'M': 'M', 'm_q': 'm/q', 'q': 'q', 'N': 'N'}
+    def plot_beam(self, x='xi', y='pz' , cond=None, x_units='', y_units='', hist=False, **kwargs):
+        columns = {'xi': 0, 'r': 0, 'x': 0, 'y': 0, 'pz': 1, 'pr': 1, 'px': 1, 'py': 1, 'pf': 1, 'phi': 2, 'M': 2, 'q_m': 2, 'q': 2, 'N': 2}
+        tolatex = {'xi': r'\xi', 'r': 'r', 'x': 'x', 'y':'y', 'pz': 'p_z', 'pr': 'p_r', 'px': 'p_x', 'py': 'p_y', 'pf': r'p_\phi', 'phi':'\phi', 'M': 'M', 'q_m': 'q/m', 'q': 'q', 'N': 'N'}
         if (x, y not in columns.keys())[-1]:
             print('Choose x, y from:', columns.keys())
             return True
                     
-        if self.beam is None and self.__read_beamfile__():
+        if self.beam is None and add_beam():
             print('Beam is not found')
             return True
         
         beam = self.beam.copy(deep=True)[:-1]
         if 'pf' in [x, y]:
-                beam['pf'] = beam.M*m_MeV/beam.m_q/beam.r        
-        beam.pz = beam.pz*m_MeV*beam.m_q
-        beam.pr = beam.pr*m_MeV*beam.m_q
+                beam['pf'] = beam.M/beam.r
+#         beam.pz = beam.pz*m_MeV
+#         beam.pr = beam.pr*m_MeV
+        for arg in [x, y]:
+            if columns[arg] == 1:
+                beam[arg] *= m_MeV 
+        
         
         l_units = {'nm': 1e7*c/self.wp, 'um': 1e4*c/self.wp, 'mm': 10*c/self.wp, 'cm': 1*c/self.wp, 
                    'm': 1e-2*c/self.wp, 'c/wp': 1.}
@@ -252,7 +312,10 @@ class LCODEplot():
         beam[y] = y_scale*beam[y]
         if cond is not None:
             beam = beam[beam.eval(cond)]
-        plt.plot(beam[x], beam[y], 'o', **kwargs)
+        if hist:
+            plt.hist2d(beam[x], beam[y], **kwargs)
+        else:
+            plt.plot(beam[x], beam[y], 'o', **kwargs)
         
         x_units = x_units.replace('wp', '\omega_p')
         x_units = ('(' + x_units + ')')*bool(x_units)
@@ -280,18 +343,18 @@ class LCODEplot():
         return False
 
 
-    def plot_xi_Er(self):
-        return
-    def plot_xi_Ez():
-        return
-    def plot_xi_Ef():
-        return
-    def plot_xi_Br():
-        return
-    def plot_xi_Bz():
-        return
-    def plot_xi_Bf():
-        return     
+#     def plot_xi_Er(self):
+#         return
+#     def plot_xi_Ez():
+#         return
+#     def plot_xi_Ef():
+#         return
+#     def plot_xi_Br():
+#         return
+#     def plot_xi_Bz():
+#         return
+#     def plot_xi_Bf():
+#         return     
     
     
     
