@@ -286,7 +286,7 @@ class LCODEplot():
         
         
         l_units = {'nm': 1e7*c/self.wp, 'um': 1e4*c/self.wp, 'mm': 10*c/self.wp, 'cm': 1*c/self.wp, 
-                   'm': 1e-2*c/self.wp, 'c/wp': 1.}
+                   'm': 1e-2*c/self.wp, 'c/wp': 1., 'ps': 1e+12/self.wp}
         p_units = {'eV/c': 1e6, 'keV/c': 1e3, 'MeV/c': 1., 'GeV/c': 1e-3, 'TeV/c': 1e-6}
         other_units = {'': 1.}
         units = [l_units, p_units, other_units]
